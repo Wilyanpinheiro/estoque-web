@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sistema de Estoque</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; }
+    header { background: #2c3e50; padding: 15px; color: #fff; }
+    nav button { margin-right: 10px; padding: 8px 12px; cursor: pointer; }
+    main { padding: 20px; }
+    section { display: none; }
+    section.active { display: block; }
+    label { display: block; margin-top: 10px; }
+    input, button { padding: 6px; margin-top: 4px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 15px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background: #f0f0f0; }
+    .vencido { background-color: #f8d7da; }
+    .proximo-vencer { background-color: #fff3cd; }
+
+    /* TOAST */
+    #toast {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #333;
+      color: #fff;
+      padding: 12px 18px;
+      border-radius: 4px;
+      opacity: 0;
+      transition: opacity 0.4s;
+      z-index: 2000;
+    }
+    #toast.show { opacity: 1; }
+
+    /* MODAL CÂMERA */
+    #modalCamera {
+      display: none;
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.6);
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+    #modalCamera .box {
+      background: #fff;
+      padding: 20px;
+      border-radius: 6px;
+      text-align: center;
+      width: 320px;
+    }
+    #modalCamera video { width: 100%; margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Sistema Web de Gerenciamento de Estoque</h1>
+  <nav>
+    <button onclick="mostrarTela('cadastro')">Cadastro</button>
+    <button onclick="mostrarTela('consulta')">Consulta</button>
+    <button onclick="mostrarTela('retirada')">Retirada</button>
+  </nav>
+</header>
+
+<main>
+  <!-- CADASTRO -->
+  <section id="cadastro" class="active">
+    <h2>Cadastro de Item</h2>
+    <label>Tipo
+      <input type="text" id="tipo" />
+    </label>
+    <label>Quantidade
+      <input type="number" id="quantidade" />
+    </label>
+    <label>Código de Barras
+      <input type="text" id="codigo" />
+    </label>
+    <button type="button" onclick="abrirCamera('cadastro')">📷 Escanear código</button>
+    <label>Validade
+      <input type="date" id="validade" />
+    </label>
+    <button onclick="cadastrarItem()">Cadastrar</button>
+  </section>
+
+  <!-- CONSULTA -->
+  <section id="consulta">
+    <h2>Consulta de Itens</h2>
+    <label>Pesquisar por Código de Barras
+      <input type="text" id="pesquisa" onkeyup="consultarItens()" />
+    </label>
+    <button type="button" onclick="abrirCamera('consulta')">📷 Escanear código</button>
+    <table>
+      <thead>
+        <tr>
+          <th>Tipo</th>
+          <th>Quantidade</th>
+          <th>Código</th>
+          <th>Validade</th>
+          <th>Ações</th>
+        </tr>
+      </thead>
+      <tbody id="tabelaItens"></tbody>
+    </table>
+  </section>
+
+  <!-- RETIRADA -->
+  <section id="retirada">
+    <h2>Retirada de Item</h2>
+    <label>Código de Barras
+      <input type="text" id="retiradaBusca" />
+    </label>
+    <button type="button" onclick="abrirCamera('retirada')">📷 Escanear código</button>
+    <label>Quantidade a Retirar
+      <input type="number" id="retiradaQtd" />
+    </label>
+    <button onclick="retirarItem()">Retirar</button>
+  </section>
+</main>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<!-- MODAL CÂMERA -->
+<div id="modalCamera">
+  <div class="box">
+    <h3>Escanear Código</h3>
+    <p id="msgScan">Aponte a câmera para o código</p>
+    <video id="video"></video>
+    <button onclick="fecharCamera()" style="margin-top:10px;">Fechar</button>
+  </div>
+</div>
+
+<script>
+  let videoStream = null;
+  let campoDestino = 'cadastro';
+  let estoque = JSON.parse(localStorage.getItem('estoque')) || [];
+
+  function toast(msg) {
+    const t = document.getElementById('toast');
+    t.innerText = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2500);
+  }
+
+  function salvarEstoque() {
+    localStorage.setItem('estoque', JSON.stringify(estoque));
+  }
+
+  function mostrarTela(tela) {
+    document.querySelectorAll('section').forEach(sec => sec.classList.remove('active'));
+    document.getElementById(tela).classList.add('active');
+    if (tela === 'consulta') consultarItens();
+  }
+
+  async function abrirCamera(destino) {
+    campoDestino = destino;
+    const modal = document.getElementById('modalCamera');
+    const video = document.getElementById('video');
+    modal.style.display = 'flex';
+
+    try {
+      videoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      video.srcObject = videoStream;
+      await video.play();
+
+      if (!('BarcodeDetector' in window)) {
+        toast('Leitura automática não suportada');
+        return;
+      }
+
+      const detector = new BarcodeDetector({ formats: ['ean_13', 'code_128'] });
+
+      const scan = async () => {
+        if (!videoStream) return;
+        const codes = await detector.detect(video);
+        if (codes.length) {
+          if (campoDestino === 'cadastro') {
+            codigo.value = codes[0].rawValue;
+          } else if (campoDestino === 'retirada') {
+            retiradaBusca.value = codes[0].rawValue;
+          } else if (campoDestino === 'consulta') {
+            pesquisa.value = codes[0].rawValue;
+            consultarItens();
+          }
+          fecharCamera();
+        } else requestAnimationFrame(scan);
+      };
+      scan();
+    } catch {
+      toast('Erro ao acessar câmera');
+      fecharCamera();
+    }
+  }
+
+  function fecharCamera() {
+    if (videoStream) videoStream.getTracks().forEach(t => t.stop());
+    videoStream = null;
+    document.getElementById('video').srcObject = null;
+    document.getElementById('modalCamera').style.display = 'none';
+  }
+
+  function cadastrarItem() {
+    const item = estoque.find(i => i.codigo === codigo.value);
+    if (item) item.quantidade += Number(quantidade.value);
+    else estoque.push({ tipo: tipo.value, quantidade: Number(quantidade.value), codigo: codigo.value, validade: validade.value });
+    salvarEstoque();
+    tipo.value = quantidade.value = codigo.value = validade.value = '';
+    toast('Cadastro realizado');
+  }
+
+  function consultarItens() {
+    tabelaItens.innerHTML = '';
+    const hoje = new Date();
+    estoque.forEach(i => {
+      const d = Math.ceil((new Date(i.validade) - hoje) / 86400000);
+      const cls = d < 0 ? 'vencido' : d <= 5 ? 'proximo-vencer' : '';
+      tabelaItens.innerHTML += `<tr class="${cls}"><td>${i.tipo}</td><td>${i.quantidade}</td><td>${i.codigo}</td><td>${i.validade}</td><td><button onclick="excluir('${i.codigo}')">Excluir</button></td></tr>`;
+    });
+  }
+
+  function excluir(cod) {
+    if (!confirm('Deseja excluir?')) return;
+    estoque = estoque.filter(i => i.codigo !== cod);
+    salvarEstoque();
+    consultarItens();
+    toast('Item excluído');
+  }
+
+  function retirarItem() {
+    const item = estoque.find(i => i.codigo === retiradaBusca.value);
+    const qtd = Number(retiradaQtd.value);
+    if (!item) return toast('Item não cadastrado');
+    if (item.quantidade < qtd) return toast('Quantidade insuficiente');
+    item.quantidade -= qtd;
+    if (!item.quantidade) estoque = estoque.filter(i => i.codigo !== item.codigo);
+    salvarEstoque();
+    retiradaBusca.value = retiradaQtd.value = '';
+    consultarItens();
+    toast('Retirada realizada');
+  }
+</script>
+</body>
+</html>
